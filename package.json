@@ -26,7 +26,8 @@
   "dependencies": {
     "imageoptim-cli": ">= 1.6.19",
     "q": "0.9.6",
-    "grunt-contrib-jshint": "~0.6.4"
+    "grunt-contrib-jshint": "~0.6.4",
+    "fs-extra": "^0.30.0"
   },
   "peerDependencies": {
     "grunt": "~0.4.1"

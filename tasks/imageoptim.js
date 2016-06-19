@@ -31,6 +31,7 @@ module.exports = function(grunt) {
 
   var q = require('q');
   var path = require('path');
+  var fse = require('fs-extra');
   var childProcess = require('child_process');
   var exec = childProcess.exec;
   var spawn = childProcess.spawn;
@@ -44,6 +45,31 @@ module.exports = function(grunt) {
   ].map(function(dir) {
     return path.resolve(__dirname, dir);
   });
+
+  var crypto = require('crypto')
+  var fs = require('fs')
+
+  var BUFFER_SIZE = 8192
+
+  function md5FileSync (filename) {
+    var fd = fs.openSync(filename, 'r')
+    var hash = crypto.createHash('md5')
+    var buffer = new Buffer(BUFFER_SIZE)
+
+    try {
+      var bytesRead
+
+      do {
+        bytesRead = fs.readSync(fd, buffer, 0, BUFFER_SIZE)
+        hash.update(buffer.slice(0, bytesRead))
+      } while (bytesRead === BUFFER_SIZE)
+    } finally {
+      fs.closeSync(fd)
+    }
+
+    return hash.digest('hex')
+  }
+
 
   (function() {
     var config = grunt.config.data.imageoptim || {};
@@ -127,13 +153,17 @@ module.exports = function(grunt) {
    */
 
   function processDirectories(files, opts) {
-    return files.map(function(directory) {
-      return getCommandByDirectory(directory, opts);
-    }).reduce(function(promise, command) {
-      return promise.then(function() {
-        return executeDirectoryCommand(command, opts.cliPath);
+    function getDirFiles(dir) {
+      var list = fs.readdirSync(dir);
+      return list.map(function(f){
+        return path.join(dir, f);
       });
-    }, q());
+    }
+    var new_files = [];
+    files.forEach(function(dir){
+      new_files = new_files.concat(getDirFiles(dir));
+    })
+    return processFiles(new_files, opts);
   }
 
   /**
@@ -170,6 +200,33 @@ module.exports = function(grunt) {
     var deferred = q.defer();
     var errorMessage = 'ImageOptim-CLI exited with a failure status';
 
+    var in_cache_path = {};
+
+    if(opts.cache) {
+      var cache_dir = opts.cache;
+      fse.ensureDirSync(opts.cache);
+
+      var old_files = files;
+      files = [];
+
+      old_files.forEach(function(file){
+        var md5 = md5FileSync(file);
+
+        in_cache_path[file] = path.join(cache_dir, md5)
+        if(fse.existsSync(in_cache_path[file])) {
+          console.log("From cache file", path.basename(file));
+          fse.copySync(in_cache_path[file], file);
+        } else {
+          files.push(file);
+        }
+      });
+
+      if(!files.length) {
+        deferred.resolve(true)
+        return deferred.promise;
+      }
+    }
+
     imageOptimCli = spawn('./imageOptim', getCliFlags(opts), {
       cwd: opts.cliPath
     });
@@ -179,7 +236,16 @@ module.exports = function(grunt) {
     });
 
     imageOptimCli.on('exit', function(code) {
-      return code === 0 ? deferred.resolve(true) : deferred.reject(new Error(errorMessage));
+      if (code === 0) {
+        console.log("ImageOptim done!");
+        files.forEach(function(file){
+          console.log("Add to cache", path.basename(file));
+          fse.copySync(file, in_cache_path[file]);
+        });
+        deferred.resolve(true);
+      } else {
+        deferred.reject(new Error(errorMessage))
+      }
     });
 
     imageOptimCli.stdin.setEncoding('utf8');
@@ -250,7 +316,8 @@ module.exports = function(grunt) {
         cliPath: cliPath,
         jpegMini: options.jpegMini,
         imageAlpha: options.imageAlpha,
-        quitAfter: options.quitAfter
+        quitAfter: options.quitAfter,
+        cache: options.cache
       });
     });
   }
@@ -264,7 +331,8 @@ module.exports = function(grunt) {
     var options = task.options({
       jpegMini: false,
       imageAlpha: false,
-      quitAfter: false
+      quitAfter: false,
+      cache: null
     });
 
     if (!cliPath) {
